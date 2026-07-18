@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DevOps Deployment Tracker</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="container">
+    <section class="hero">
+      <p class="eyebrow">AWS · EKS · Docker · Jenkins · PostgreSQL</p>
+      <h1>DevOps Deployment Tracker</h1>
+      <p class="subtitle">
+        A small production-style application proving containerization, CI/CD,
+        database persistence, Kubernetes orchestration, and AWS deployment.
+      </p>
+      <div class="badges">
+        <span>Environment: {{ app_env }}</span>
+        <span>Version: {{ app_version }}</span>
+        <span>Pod: {{ pod_name }}</span>
+        <span>Commit: {{ git_commit[:12] }}</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div>
+        <h2>Record a deployment</h2>
+        <p>This writes to PostgreSQL locally or Amazon RDS in AWS.</p>
+      </div>
+      <form id="deployment-form">
+        <input name="service_name" placeholder="Service name" required>
+        <select name="environment" required>
+          <option value="dev">Development</option>
+          <option value="qa">QA</option>
+          <option value="production">Production</option>
+        </select>
+        <select name="status" required>
+          <option value="SUCCESS">Success</option>
+          <option value="RUNNING">Running</option>
+          <option value="FAILED">Failed</option>
+        </select>
+        <button type="submit">Save deployment</button>
+      </form>
+      <p id="form-message" class="message" aria-live="polite"></p>
+    </section>
+
+    <section class="panel">
+      <div class="table-heading">
+        <div>
+          <h2>Recent deployments</h2>
+          <p>Latest 20 records from the connected database.</p>
+        </div>
+        <a href="/api/deployments">View JSON API</a>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Service</th>
+              <th>Environment</th>
+              <th>Status</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for record in records %}
+            <tr>
+              <td>{{ record.service_name }}</td>
+              <td>{{ record.environment }}</td>
+              <td><span class="status {{ record.status|lower }}">{{ record.status }}</span></td>
+              <td>{{ record.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="4" class="empty">No deployments recorded yet.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="architecture">
+      <h2>Delivery flow</h2>
+      <div class="flow">
+        <span>Git push</span><b>→</b><span>Jenkins</span><b>→</b><span>Docker image</span>
+        <b>→</b><span>Amazon ECR</span><b>→</b><span>Amazon EKS</span>
+        <b>→</b><span>Load Balancer</span><b>→</b><span>Amazon RDS</span>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById("deployment-form");
+    const message = document.getElementById("form-message");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      message.textContent = "Saving...";
+      const payload = Object.fromEntries(new FormData(form).entries());
+      const response = await fetch("/api/deployments", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) {
+        message.textContent = "Deployment saved. Refreshing...";
+        window.location.reload();
+      } else {
+        const body = await response.json();
+        message.textContent = body.error || "Unable to save deployment.";
+      }
+    });
+  </script>
+</body>
+</html>

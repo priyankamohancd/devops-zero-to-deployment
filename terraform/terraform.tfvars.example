@@ -1,0 +1,14 @@
+project_name       = "devops-starter-kit"
+aws_region         = "eu-central-1"
+kubernetes_version = "1.35"
+
+# Replace this with your own public IP in CIDR format for better security.
+# Example: ["203.0.113.10/32"]
+cluster_public_access_cidrs = ["0.0.0.0/0"]
+
+node_instance_types = ["t3.small"]
+node_desired_size   = 1
+node_min_size       = 1
+node_max_size       = 2
+
+db_instance_class = "db.t4g.micro"

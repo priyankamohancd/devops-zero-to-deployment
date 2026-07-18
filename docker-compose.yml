@@ -1,0 +1,48 @@
+services:
+  database:
+    image: postgres:16-alpine
+    container_name: devops-starter-kit-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-devops_starter_kit}
+      POSTGRES_USER: ${POSTGRES_USER:-devops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devops-local-password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-devops} -d ${POSTGRES_DB:-devops_starter_kit}
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      args:
+        APP_VERSION: local-compose
+        GIT_COMMIT: local
+    image: devops-starter-kit-app:local
+    container_name: devops-starter-kit-web
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-devops}:${POSTGRES_PASSWORD:-devops-local-2026}@database:5432/${POSTGRES_DB:-devops_starter_kit}"
+    ports:
+      - "5001:5000"
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:5000/health')
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
