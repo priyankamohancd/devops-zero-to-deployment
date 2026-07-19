@@ -9,8 +9,8 @@ locals {
   azs          = slice(data.aws_availability_zones.available.names, 0, 2)
 
   common_tags = {
-    Project   = var.project_name
-    ManagedBy = "Terraform"
+    Project          = var.project_name
+    ManagedBy        = "Terraform"
     ReferenceProject = "true"
   }
 }
@@ -38,13 +38,13 @@ resource "aws_subnet" "public" {
 
   vpc_id                  = aws_vpc.main.id
   availability_zone       = local.azs[count.index]
-  cidr_block               = cidrsubnet(var.vpc_cidr, 8, count.index)
+  cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index)
   map_public_ip_on_launch = true
 
   tags = {
-    Name                                      = "${var.project_name}-public-${count.index + 1}"
+    Name                                          = "${var.project_name}-public-${count.index + 1}"
     "kubernetes.io/cluster/${local.cluster_name}" = "shared"
-    "kubernetes.io/role/elb"                 = "1"
+    "kubernetes.io/role/elb"                      = "1"
   }
 }
 
@@ -53,10 +53,10 @@ resource "aws_subnet" "private" {
 
   vpc_id            = aws_vpc.main.id
   availability_zone = local.azs[count.index]
-  cidr_block         = cidrsubnet(var.vpc_cidr, 8, count.index + 10)
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 10)
 
   tags = {
-    Name                                           = "${var.project_name}-private-${count.index + 1}"
+    Name                                          = "${var.project_name}-private-${count.index + 1}"
     "kubernetes.io/cluster/${local.cluster_name}" = "shared"
     "kubernetes.io/role/internal-elb"             = "1"
   }
