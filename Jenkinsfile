@@ -19,7 +19,7 @@ pipeline {
     booleanParam(
       name: 'DEPLOY_TO_AWS',
       defaultValue: false,
-      description: 'Build, push the Docker image to Amazon ECR and deploy it to Amazon EKS.'
+      description: 'Push the Docker image to Amazon ECR and deploy it to Amazon EKS.'
     )
 
     string(
@@ -39,8 +39,7 @@ pipeline {
     PYTHONUNBUFFERED = '1'
 
     /*
-     * These values must exactly match the names used
-     * inside the Kubernetes YAML files.
+     * These values must match the names in the Kubernetes YAML files.
      */
     K8S_NAMESPACE  = 'devops-starter-kit'
     K8S_DEPLOYMENT = 'devops-starter-kit-app'
@@ -49,8 +48,15 @@ pipeline {
   }
 
   stages {
+
     stage('Checkout') {
       steps {
+        /*
+         * Removes stale .terraform metadata and local state
+         * left by previous Jenkins builds.
+         */
+        deleteDir()
+
         checkout scm
 
         script {
@@ -129,6 +135,16 @@ pytest \
         sh '''#!/usr/bin/env bash
 set -euo pipefail
 
+if [ ! -f terraform/backend.tf ]; then
+  echo "ERROR: terraform/backend.tf is missing."
+  exit 1
+fi
+
+if ! grep -Eq 'backend[[:space:]]+"s3"' terraform/backend.tf; then
+  echo 'ERROR: terraform/backend.tf does not contain backend "s3".'
+  exit 1
+fi
+
 terraform -chdir=terraform init \
   -backend=false \
   -input=false
@@ -153,7 +169,7 @@ uname -m
 
 export DOCKER_BUILDKIT=1
 
-echo "Building linux/amd64 image for the EKS t3 worker node..."
+echo "Building a linux/amd64 image for the EKS worker node..."
 
 docker build \
   --platform linux/amd64 \
@@ -166,14 +182,13 @@ IMAGE_ARCH=$(docker image inspect \
   "${LOCAL_IMAGE}" \
   --format '{{.Architecture}}')
 
-echo "Docker image architecture: ${IMAGE_ARCH}"
+echo "Built image architecture: ${IMAGE_ARCH}"
 
 if [ "${IMAGE_ARCH}" != "amd64" ]; then
-  echo "ERROR: Expected amd64, but Docker built ${IMAGE_ARCH}."
+  echo "ERROR: Expected amd64 but built ${IMAGE_ARCH}."
   exit 1
 fi
 
-echo "Docker image created successfully:"
 docker image ls "${LOCAL_IMAGE}"
 '''
       }
@@ -267,11 +282,30 @@ fi
           sh '''#!/usr/bin/env bash
 set -euo pipefail
 
+if [ ! -f terraform/backend.tf ]; then
+  echo "ERROR: terraform/backend.tf is missing."
+  exit 1
+fi
+
+if ! grep -Eq 'backend[[:space:]]+"s3"' terraform/backend.tf; then
+  echo 'ERROR: An S3 backend is not configured.'
+  exit 1
+fi
+
+echo "Removing stale local Terraform files..."
+
+rm -rf terraform/.terraform
+rm -f terraform/terraform.tfstate
+rm -f terraform/terraform.tfstate.backup
 rm -f terraform/tfplan
 
+echo "Initializing the S3 remote backend..."
+
 terraform -chdir=terraform init \
-  -input=false \
-  -reconfigure
+  -reconfigure \
+  -input=false
+
+echo "Creating Terraform plan..."
 
 terraform -chdir=terraform plan \
   -input=false \
@@ -280,12 +314,15 @@ terraform -chdir=terraform plan \
   -var="project_name=${PROJECT_NAME}" \
   -var="aws_region=${AWS_REGION}"
 
+echo "Applying Terraform plan..."
+
 terraform -chdir=terraform apply \
   -input=false \
   -lock-timeout=5m \
   tfplan
 
 echo "Terraform outputs:"
+
 terraform -chdir=terraform output
 '''
         }
@@ -357,7 +394,7 @@ echo "Pushing image..."
 
 docker push "${IMAGE_URI}"
 
-echo "Verifying pushed image..."
+echo "Verifying the pushed image..."
 
 aws ecr describe-images \
   --region "${AWS_REGION}" \
@@ -401,21 +438,26 @@ print_kubernetes_diagnostics() {
   echo "=================================================="
 
   echo "Nodes:"
-  kubectl get nodes -o wide
+
+  kubectl get nodes \
+    -o wide
 
   echo "Namespace resources:"
+
   kubectl \
     -n "${K8S_NAMESPACE}" \
     get all \
     -o wide
 
   echo "ReplicaSets:"
+
   kubectl \
     -n "${K8S_NAMESPACE}" \
     get replicasets \
     -o wide
 
   echo "Recent Kubernetes events:"
+
   kubectl \
     -n "${K8S_NAMESPACE}" \
     get events \
@@ -469,9 +511,10 @@ aws eks update-kubeconfig \
 
 echo "Checking Kubernetes access..."
 
-kubectl get nodes -o wide
+kubectl get nodes \
+  -o wide
 
-echo "Checking worker node architecture..."
+echo "Checking worker-node architecture..."
 
 NODE_ARCHITECTURES=$(kubectl get nodes \
   -o jsonpath='{range .items[*]}{.metadata.name}={.status.nodeInfo.architecture}{"\\n"}{end}')
@@ -480,12 +523,13 @@ printf '%s\n' "${NODE_ARCHITECTURES}"
 
 if printf '%s\n' "${NODE_ARCHITECTURES}" |
    grep -vq '=amd64$'; then
-  echo "ERROR: At least one EKS worker is not amd64."
+
+  echo "ERROR: At least one EKS worker node is not amd64."
   echo "The Docker image was built for linux/amd64."
   exit 1
 fi
 
-echo "Reading the database URL from AWS Secrets Manager..."
+echo "Reading database configuration from AWS Secrets Manager..."
 
 SECRET_JSON=$(aws secretsmanager get-secret-value \
   --region "${AWS_REGION}" \
@@ -498,11 +542,12 @@ DATABASE_URL=$(printf '%s' "${SECRET_JSON}" |
 
 if [ -z "${DATABASE_URL}" ] ||
    [ "${DATABASE_URL}" = "null" ]; then
+
   echo "ERROR: DATABASE_URL was not found in Secrets Manager."
   exit 1
 fi
 
-echo "Checking Kubernetes files..."
+echo "Checking required Kubernetes files..."
 
 for REQUIRED_FILE in \
   k8s/namespace.yaml \
@@ -584,8 +629,14 @@ if kubectl \
     deployment/aws-load-balancer-controller \
     --timeout=5m
 else
-  echo "WARNING: aws-load-balancer-controller deployment was not found."
-  echo "Ingress will be applied, but ALB creation may fail."
+  echo "ERROR: AWS Load Balancer Controller was not found."
+
+  kubectl \
+    -n kube-system \
+    get deployments \
+    -o wide || true
+
+  exit 1
 fi
 
 echo "Applying ALB Ingress..."
@@ -602,7 +653,9 @@ if ! kubectl \
   --timeout=10m
 then
   echo "ERROR: Application rollout failed."
+
   print_kubernetes_diagnostics
+
   exit 1
 fi
 
@@ -716,7 +769,7 @@ for ATTEMPT in $(seq 1 40); do
         sleep 15
       done
 
-      echo "ERROR: ALB exists, but the health endpoint did not respond."
+      echo "ERROR: The ALB exists, but /health did not respond."
       exit 1
     fi
 
@@ -748,7 +801,7 @@ kubectl \
   deployment/aws-load-balancer-controller \
   --tail=200 || true
 
-echo "Recent events:"
+echo "Recent Kubernetes events:"
 
 kubectl \
   -n "${K8S_NAMESPACE}" \
